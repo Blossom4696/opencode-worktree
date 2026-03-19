@@ -77,7 +77,7 @@ worktree_create:
 
 When called, this:
 1. Creates git worktree at `~/.local/share/opencode/worktree/<project-id>/feature/dark-mode`
-2. Syncs files based on `.opencode/worktree.jsonc` config
+2. Syncs files based on `.opencode/worktree.jsonc`, or falls back to `~/.config/opencode/worktree.jsonc` when the repo-local config is missing
 3. Runs post-create hooks (e.g., `pnpm install`)
 4. Opens a new terminal with OpenCode running
 
@@ -117,7 +117,13 @@ The plugin detects your terminal automatically:
 
 ## Configuration
 
-Auto-creates `.opencode/worktree.jsonc` on first use:
+The plugin resolves config in this order:
+
+1. `.opencode/worktree.jsonc` in the repository root
+2. `~/.config/opencode/worktree.jsonc`
+3. Built-in defaults
+
+If neither file exists, it auto-creates `.opencode/worktree.jsonc` on first use:
 
 ```jsonc
 {

@@ -603,16 +603,41 @@ async function runHooks(cwd: string, commands: string[], log: Logger): Promise<v
 	}
 }
 
-/**
- * Load worktree-specific configuration from .opencode/worktree.jsonc
- * Auto-creates config file with helpful defaults if it doesn't exist.
- */
-async function loadWorktreeConfig(directory: string, log: Logger): Promise<WorktreeConfig> {
-	const configPath = path.join(directory, ".opencode", "worktree.jsonc")
-
+async function readWorktreeConfigFile(configPath: string, log: Logger): Promise<WorktreeConfig | undefined> {
 	try {
 		const file = Bun.file(configPath)
-		if (!(await file.exists())) {
+		if (!(await file.exists())) return undefined
+
+		const content = await file.text()
+		const parsed = parseJsonc(content)
+		if (parsed === undefined) {
+			log.error(`[worktree] Invalid worktree config syntax: ${configPath}`)
+			return worktreeConfigSchema.parse({})
+		}
+
+		return worktreeConfigSchema.parse(parsed)
+	} catch (error) {
+		log.warn(`[worktree] Failed to load config ${configPath}: ${error}`)
+		return worktreeConfigSchema.parse({})
+	}
+}
+
+async function loadWorktreeConfig(directory: string, log: Logger): Promise<WorktreeConfig> {
+	const localConfigPath = path.join(directory, ".opencode", "worktree.jsonc")
+	const globalConfigPath = path.join(os.homedir(), ".config", "opencode", "worktree.jsonc")
+
+	try {
+		const localConfig = await readWorktreeConfigFile(localConfigPath, log)
+		if (localConfig !== undefined) {
+			return localConfig
+		}
+
+		const globalConfig = await readWorktreeConfigFile(globalConfigPath, log)
+		if (globalConfig !== undefined) {
+			log.info(`[worktree] Using global config: ${globalConfigPath}`)
+			return globalConfig
+		}
+
 			// Auto-create config with helpful defaults and comments
 			const defaultConfig = `{
   "$schema": "https://registry.kdco.dev/schemas/worktree.json",
@@ -646,19 +671,9 @@ async function loadWorktreeConfig(directory: string, log: Logger): Promise<Workt
 `
 			// Ensure .opencode directory exists
 			await mkdir(path.join(directory, ".opencode"), { recursive: true })
-			await Bun.write(configPath, defaultConfig)
-			log.info(`[worktree] Created default config: ${configPath}`)
+			await Bun.write(localConfigPath, defaultConfig)
+			log.info(`[worktree] Created default config: ${localConfigPath}`)
 			return worktreeConfigSchema.parse({})
-		}
-
-		const content = await file.text()
-		// Use proper JSONC parser (handles comments in strings correctly)
-		const parsed = parseJsonc(content)
-		if (parsed === undefined) {
-			log.error(`[worktree] Invalid worktree.jsonc syntax`)
-			return worktreeConfigSchema.parse({})
-		}
-		return worktreeConfigSchema.parse(parsed)
 	} catch (error) {
 		log.warn(`[worktree] Failed to load config: ${error}`)
 		return worktreeConfigSchema.parse({})
