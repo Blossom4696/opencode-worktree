@@ -711,6 +711,52 @@ export const WorktreePlugin: Plugin = async (ctx) => {
 
 	return {
 		tool: {
+			btw: tool({
+				description:
+					"Fork the current session and open a new terminal running OpenCode in this directory.",
+				args: {},
+				async execute(_args, toolCtx) {
+					if (!toolCtx.sessionID) {
+						return "Failed to fork session: missing session ID"
+					}
+
+					const projectId = await getProjectId(directory, client)
+					const { forkedSession, planCopied, delegationsCopied } = await forkWithContext(
+						client,
+						toolCtx.sessionID,
+						projectId,
+						async (sid) => {
+							let currentId = sid
+							for (let depth = 0; depth < MAX_SESSION_CHAIN_DEPTH; depth++) {
+								const session = await client.session.get({ path: { id: currentId } })
+								if (!session.data?.parentID) return currentId
+								currentId = session.data.parentID
+							}
+							return currentId
+						},
+					)
+
+					log.debug(
+						`Forked session ${forkedSession.id}, plan: ${planCopied}, delegations: ${delegationsCopied}`,
+					)
+
+					const resumeCommand = `opencode --session ${forkedSession.id}`
+
+					const terminalResult = await openTerminal(
+						directory,
+						resumeCommand,
+						forkedSession.id,
+					)
+
+					if (!terminalResult.success) {
+						log.warn(`[worktree] Failed to open terminal: ${terminalResult.error}`)
+						return `Forked session ${forkedSession.id}, but failed to open terminal: ${terminalResult.error}\nRun: ${resumeCommand}`
+					}
+
+					return `Forked session ${forkedSession.id}\n\nA new terminal has been opened with OpenCode.\nRun manually if needed: ${resumeCommand}`
+				},
+			}),
+
 			worktree_create: tool({
 				description:
 					"Create a new git worktree for isolated development. A new terminal will open with OpenCode in the worktree.",
