@@ -32,6 +32,10 @@ import { z } from "zod"
 
 import { getProjectId } from "./kdco-primitives/get-project-id"
 import {
+	parseWorktreeCommand,
+	WorktreeCommandHandledError,
+} from "./worktree/command-routing"
+import {
 	addSession,
 	clearPendingDelete,
 	getPendingDelete,
@@ -674,10 +678,20 @@ async function loadWorktreeConfig(directory: string, log: Logger): Promise<Workt
 			await Bun.write(localConfigPath, defaultConfig)
 			log.info(`[worktree] Created default config: ${localConfigPath}`)
 			return worktreeConfigSchema.parse({})
-	} catch (error) {
-		log.warn(`[worktree] Failed to load config: ${error}`)
-		return worktreeConfigSchema.parse({})
+		} catch (error) {
+			log.warn(`[worktree] Failed to load config: ${error}`)
+			return worktreeConfigSchema.parse({})
+		}
+}
+
+async function getRootSessionId(client: OpencodeClient, sessionId: string): Promise<string> {
+	let currentId = sessionId
+	for (let depth = 0; depth < MAX_SESSION_CHAIN_DEPTH; depth++) {
+		const session = await client.session.get({ path: { id: currentId } })
+		if (!session.data?.parentID) return currentId
+		currentId = session.data.parentID
 	}
+	return currentId
 }
 
 // =============================================================================
@@ -709,6 +723,155 @@ export const WorktreePlugin: Plugin = async (ctx) => {
 	// Initialize SQLite database
 	const database = await initDb(directory, log)
 
+	async function executeBtw(prompt: string | undefined, sessionId: string | undefined): Promise<string> {
+		if (!sessionId) {
+			return "Failed to fork session: missing session ID"
+		}
+
+		const trimmedPrompt = prompt?.trim() || undefined
+		const projectId = await getProjectId(directory, client)
+		const { forkedSession, planCopied, delegationsCopied } = await forkWithContext(
+			client,
+			sessionId,
+			projectId,
+			(sid) => getRootSessionId(client, sid),
+		)
+
+		log.debug(
+			`Forked session ${forkedSession.id}, plan: ${planCopied}, delegations: ${delegationsCopied}`,
+		)
+
+		const resumeCommand = `opencode --session ${forkedSession.id}`
+		let promptWarning = ""
+
+		if (trimmedPrompt) {
+			try {
+				await client.session.prompt({
+					path: { id: forkedSession.id },
+					body: {
+						parts: [{ type: "text", text: trimmedPrompt }],
+					},
+				})
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error)
+				log.warn(`[worktree] Failed to send prompt to forked session ${forkedSession.id}: ${message}`)
+				promptWarning = `\n\nPrompt was not sent automatically: ${message}\nSend it manually after opening the session if needed.`
+			}
+		}
+
+		const terminalResult = await openTerminal(directory, resumeCommand, forkedSession.id)
+
+		if (!terminalResult.success) {
+			log.warn(`[worktree] Failed to open terminal: ${terminalResult.error}`)
+			return `Forked session ${forkedSession.id}, but failed to open terminal: ${terminalResult.error}\nRun: ${resumeCommand}${promptWarning}`
+		}
+
+		return `Forked session ${forkedSession.id}\n\nA new terminal has been opened with OpenCode.\nRun manually if needed: ${resumeCommand}${promptWarning}`
+	}
+
+	async function executeWorktreeCreate(
+		args: { branch: string; baseBranch?: string },
+		sessionId: string | undefined,
+	): Promise<string> {
+		const branchResult = branchNameSchema.safeParse(args.branch)
+		if (!branchResult.success) {
+			return `❌ Invalid branch name: ${branchResult.error.issues[0]?.message}`
+		}
+
+		if (args.baseBranch) {
+			const baseResult = branchNameSchema.safeParse(args.baseBranch)
+			if (!baseResult.success) {
+				return `❌ Invalid base branch name: ${baseResult.error.issues[0]?.message}`
+			}
+		}
+
+		if (!sessionId) {
+			return "Failed to create worktree: missing session ID"
+		}
+
+		const result = await createWorktree(directory, args.branch, args.baseBranch)
+		if (!result.ok) {
+			return `Failed to create worktree: ${result.error}`
+		}
+
+		const worktreePath = result.value
+		const worktreeConfig = await loadWorktreeConfig(directory, log)
+		const mainWorktreePath = directory
+
+		if (worktreeConfig.sync.copyFiles.length > 0) {
+			await copyFiles(mainWorktreePath, worktreePath, worktreeConfig.sync.copyFiles, log)
+		}
+
+		if (worktreeConfig.sync.symlinkDirs.length > 0) {
+			await symlinkDirs(mainWorktreePath, worktreePath, worktreeConfig.sync.symlinkDirs, log)
+		}
+
+		if (worktreeConfig.hooks.postCreate.length > 0) {
+			await runHooks(worktreePath, worktreeConfig.hooks.postCreate, log)
+		}
+
+		const projectId = await getProjectId(worktreePath, client)
+		const { forkedSession, planCopied, delegationsCopied } = await forkWithContext(
+			client,
+			sessionId,
+			projectId,
+			(sid) => getRootSessionId(client, sid),
+		)
+
+		log.debug(
+			`Forked session ${forkedSession.id}, plan: ${planCopied}, delegations: ${delegationsCopied}`,
+		)
+
+		const terminalResult = await openTerminal(
+			worktreePath,
+			`opencode --session ${forkedSession.id}`,
+			args.branch,
+		)
+
+		if (!terminalResult.success) {
+			log.warn(`[worktree] Failed to open terminal: ${terminalResult.error}`)
+		}
+
+		addSession(database, {
+			id: forkedSession.id,
+			branch: args.branch,
+			path: worktreePath,
+			createdAt: new Date().toISOString(),
+		})
+
+		return `Worktree created at ${worktreePath}\n\nA new terminal has been opened with OpenCode.`
+	}
+
+	async function executeWorktreeDelete(
+		_reason: string,
+		sessionId: string | undefined,
+	): Promise<string> {
+		const session = getSession(database, sessionId ?? "")
+		if (!session) {
+			return "No worktree associated with this session"
+		}
+
+		setPendingDelete(database, { branch: session.branch, path: session.path }, client)
+		return "Worktree marked for cleanup. It will be removed when this session ends."
+	}
+
+	async function showCommandResult(message: string): Promise<void> {
+		try {
+			await client.tui.showToast({
+				body: {
+					title: "Worktree",
+					message,
+					variant: "success",
+					duration: 4000,
+				},
+			})
+		} catch (error) {
+			log.debug(
+				`[worktree] Failed to show command result toast: ${error instanceof Error ? error.message : String(error)}`,
+			)
+		}
+	}
+
 	return {
 		tool: {
 			btw: tool({
@@ -721,62 +884,7 @@ export const WorktreePlugin: Plugin = async (ctx) => {
 						.describe("Optional prompt to send into the forked session before opening it"),
 				},
 				async execute(args, toolCtx) {
-					if (!toolCtx.sessionID) {
-						return "Failed to fork session: missing session ID"
-					}
-
-					const prompt = args.prompt?.trim()
-
-					const projectId = await getProjectId(directory, client)
-					const { forkedSession, planCopied, delegationsCopied } = await forkWithContext(
-						client,
-						toolCtx.sessionID,
-						projectId,
-						async (sid) => {
-							let currentId = sid
-							for (let depth = 0; depth < MAX_SESSION_CHAIN_DEPTH; depth++) {
-								const session = await client.session.get({ path: { id: currentId } })
-								if (!session.data?.parentID) return currentId
-								currentId = session.data.parentID
-							}
-							return currentId
-						},
-					)
-
-					log.debug(
-						`Forked session ${forkedSession.id}, plan: ${planCopied}, delegations: ${delegationsCopied}`,
-					)
-
-					const resumeCommand = `opencode --session ${forkedSession.id}`
-					let promptWarning = ""
-
-					if (prompt) {
-						try {
-							await client.session.prompt({
-								path: { id: forkedSession.id },
-								body: {
-									parts: [{ type: "text", text: prompt }],
-								},
-							})
-						} catch (error) {
-							const message = error instanceof Error ? error.message : String(error)
-							log.warn(`[worktree] Failed to send prompt to forked session ${forkedSession.id}: ${message}`)
-							promptWarning = `\n\nPrompt was not sent automatically: ${message}\nSend it manually after opening the session if needed.`
-						}
-					}
-
-					const terminalResult = await openTerminal(
-						directory,
-						resumeCommand,
-						forkedSession.id,
-					)
-
-					if (!terminalResult.success) {
-						log.warn(`[worktree] Failed to open terminal: ${terminalResult.error}`)
-						return `Forked session ${forkedSession.id}, but failed to open terminal: ${terminalResult.error}\nRun: ${resumeCommand}${promptWarning}`
-					}
-
-					return `Forked session ${forkedSession.id}\n\nA new terminal has been opened with OpenCode.\nRun manually if needed: ${resumeCommand}${promptWarning}`
+					return executeBtw(args.prompt, toolCtx.sessionID)
 				},
 			}),
 
@@ -793,89 +901,7 @@ export const WorktreePlugin: Plugin = async (ctx) => {
 						.describe("Base branch to create from (defaults to HEAD)"),
 				},
 				async execute(args, toolCtx) {
-					// Validate branch name at boundary
-					const branchResult = branchNameSchema.safeParse(args.branch)
-					if (!branchResult.success) {
-						return `❌ Invalid branch name: ${branchResult.error.issues[0]?.message}`
-					}
-
-					// Validate base branch name at boundary
-					if (args.baseBranch) {
-						const baseResult = branchNameSchema.safeParse(args.baseBranch)
-						if (!baseResult.success) {
-							return `❌ Invalid base branch name: ${baseResult.error.issues[0]?.message}`
-						}
-					}
-
-					// Create worktree
-					const result = await createWorktree(directory, args.branch, args.baseBranch)
-					if (!result.ok) {
-						return `Failed to create worktree: ${result.error}`
-					}
-
-					const worktreePath = result.value
-
-					// Sync files from main worktree
-					const worktreeConfig = await loadWorktreeConfig(directory, log)
-					const mainWorktreePath = directory // The repo root is the main worktree
-
-					// Copy files
-					if (worktreeConfig.sync.copyFiles.length > 0) {
-						await copyFiles(mainWorktreePath, worktreePath, worktreeConfig.sync.copyFiles, log)
-					}
-
-					// Symlink directories
-					if (worktreeConfig.sync.symlinkDirs.length > 0) {
-						await symlinkDirs(mainWorktreePath, worktreePath, worktreeConfig.sync.symlinkDirs, log)
-					}
-
-					// Run postCreate hooks
-					if (worktreeConfig.hooks.postCreate.length > 0) {
-						await runHooks(worktreePath, worktreeConfig.hooks.postCreate, log)
-					}
-
-					// Fork session with context (replaces --session resume)
-					const projectId = await getProjectId(worktreePath, client)
-					const { forkedSession, planCopied, delegationsCopied } = await forkWithContext(
-						client,
-						toolCtx.sessionID,
-						projectId,
-						async (sid) => {
-							// Walk up parentID chain to find root session
-							let currentId = sid
-							for (let depth = 0; depth < MAX_SESSION_CHAIN_DEPTH; depth++) {
-								const session = await client.session.get({ path: { id: currentId } })
-								if (!session.data?.parentID) return currentId
-								currentId = session.data.parentID
-							}
-							return currentId
-						},
-					)
-
-					log.debug(
-						`Forked session ${forkedSession.id}, plan: ${planCopied}, delegations: ${delegationsCopied}`,
-					)
-
-					// Spawn worktree with forked session
-					const terminalResult = await openTerminal(
-						worktreePath,
-						`opencode --session ${forkedSession.id}`,
-						args.branch,
-					)
-
-					if (!terminalResult.success) {
-						log.warn(`[worktree] Failed to open terminal: ${terminalResult.error}`)
-					}
-
-					// Record session for tracking (used by delete flow)
-					addSession(database, {
-						id: forkedSession.id,
-						branch: args.branch,
-						path: worktreePath,
-						createdAt: new Date().toISOString(),
-					})
-
-					return `Worktree created at ${worktreePath}\n\nA new terminal has been opened with OpenCode.`
+					return executeWorktreeCreate(args, toolCtx.sessionID)
 				},
 			}),
 
@@ -887,19 +913,31 @@ export const WorktreePlugin: Plugin = async (ctx) => {
 						.string()
 						.describe("Brief explanation of why you are calling this tool"),
 				},
-				async execute(_args, toolCtx) {
-					// Find current session's worktree
-					const session = getSession(database, toolCtx?.sessionID ?? "")
-					if (!session) {
-						return `No worktree associated with this session`
-					}
-
-					// Set pending delete for session.idle (atomic operation)
-					setPendingDelete(database, { branch: session.branch, path: session.path }, client)
-
-					return `Worktree marked for cleanup. It will be removed when this session ends.`
+				async execute(args, toolCtx) {
+					return executeWorktreeDelete(args.reason, toolCtx?.sessionID)
 				},
 			}),
+		},
+
+		"command.execute.before": async (input, output): Promise<void> => {
+			const parsed = parseWorktreeCommand(input.command, input.arguments)
+			if (!parsed) return
+
+			const message = !parsed.ok
+				? parsed.error
+				: parsed.value.command === "btw"
+					? await executeBtw(parsed.value.prompt, input.sessionID)
+					: parsed.value.command === "worktree-create"
+						? await executeWorktreeCreate(
+							{ branch: parsed.value.branch, baseBranch: parsed.value.baseBranch },
+							input.sessionID,
+						)
+						: await executeWorktreeDelete(parsed.value.reason, input.sessionID)
+
+			await showCommandResult(message)
+
+			void output
+			throw new WorktreeCommandHandledError()
 		},
 
 		event: async ({ event }: { event: Event }): Promise<void> => {

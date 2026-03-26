@@ -2,6 +2,18 @@
   "name": "opencode-worktree",
   "private": true,
   "type": "module",
+  "bin": {
+    "opencode-worktree": "./bin/install.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md",
+    ".opencode/command"
+  ],
+  "scripts": {
+    "install:opencode": "node ./bin/install.js"
+  },
   "dependencies": {
     "@opencode-ai/plugin": "^1.2.24",
     "@opencode-ai/sdk": "^1.2.24",
