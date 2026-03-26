@@ -714,11 +714,18 @@ export const WorktreePlugin: Plugin = async (ctx) => {
 			btw: tool({
 				description:
 					"Fork the current session and open a new terminal running OpenCode in this directory.",
-				args: {},
-				async execute(_args, toolCtx) {
+				args: {
+					prompt: tool.schema
+						.string()
+						.optional()
+						.describe("Optional prompt to send into the forked session before opening it"),
+				},
+				async execute(args, toolCtx) {
 					if (!toolCtx.sessionID) {
 						return "Failed to fork session: missing session ID"
 					}
+
+					const prompt = args.prompt?.trim()
 
 					const projectId = await getProjectId(directory, client)
 					const { forkedSession, planCopied, delegationsCopied } = await forkWithContext(
@@ -741,6 +748,22 @@ export const WorktreePlugin: Plugin = async (ctx) => {
 					)
 
 					const resumeCommand = `opencode --session ${forkedSession.id}`
+					let promptWarning = ""
+
+					if (prompt) {
+						try {
+							await client.session.prompt({
+								path: { id: forkedSession.id },
+								body: {
+									parts: [{ type: "text", text: prompt }],
+								},
+							})
+						} catch (error) {
+							const message = error instanceof Error ? error.message : String(error)
+							log.warn(`[worktree] Failed to send prompt to forked session ${forkedSession.id}: ${message}`)
+							promptWarning = `\n\nPrompt was not sent automatically: ${message}\nSend it manually after opening the session if needed.`
+						}
+					}
 
 					const terminalResult = await openTerminal(
 						directory,
@@ -750,10 +773,10 @@ export const WorktreePlugin: Plugin = async (ctx) => {
 
 					if (!terminalResult.success) {
 						log.warn(`[worktree] Failed to open terminal: ${terminalResult.error}`)
-						return `Forked session ${forkedSession.id}, but failed to open terminal: ${terminalResult.error}\nRun: ${resumeCommand}`
+						return `Forked session ${forkedSession.id}, but failed to open terminal: ${terminalResult.error}\nRun: ${resumeCommand}${promptWarning}`
 					}
 
-					return `Forked session ${forkedSession.id}\n\nA new terminal has been opened with OpenCode.\nRun manually if needed: ${resumeCommand}`
+					return `Forked session ${forkedSession.id}\n\nA new terminal has been opened with OpenCode.\nRun manually if needed: ${resumeCommand}${promptWarning}`
 				},
 			}),
 
