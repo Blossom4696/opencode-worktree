@@ -15,7 +15,7 @@ import type { Database } from "bun:sqlite"
 import { access, copyFile, cp, mkdir, rm, stat, symlink } from "node:fs/promises"
 import * as os from "node:os"
 import * as path from "node:path"
-import { type Plugin, tool } from "@opencode-ai/plugin"
+import { type Plugin } from "@opencode-ai/plugin"
 import type { Event } from "@opencode-ai/sdk"
 import type { OpencodeClient } from "./kdco-primitives/types"
 
@@ -873,52 +873,6 @@ export const WorktreePlugin: Plugin = async (ctx) => {
 	}
 
 	return {
-		tool: {
-			btw: tool({
-				description:
-					"Fork the current session and open a new terminal running OpenCode in this directory.",
-				args: {
-					prompt: tool.schema
-						.string()
-						.optional()
-						.describe("Optional prompt to send into the forked session before opening it"),
-				},
-				async execute(args, toolCtx) {
-					return executeBtw(args.prompt, toolCtx.sessionID)
-				},
-			}),
-
-			worktree_create: tool({
-				description:
-					"Create a new git worktree for isolated development. A new terminal will open with OpenCode in the worktree.",
-				args: {
-					branch: tool.schema
-						.string()
-						.describe("Branch name for the worktree (e.g., 'feature/dark-mode')"),
-					baseBranch: tool.schema
-						.string()
-						.optional()
-						.describe("Base branch to create from (defaults to HEAD)"),
-				},
-				async execute(args, toolCtx) {
-					return executeWorktreeCreate(args, toolCtx.sessionID)
-				},
-			}),
-
-			worktree_delete: tool({
-				description:
-					"Delete the current worktree and clean up. Changes will be committed before removal.",
-				args: {
-					reason: tool.schema
-						.string()
-						.describe("Brief explanation of why you are calling this tool"),
-				},
-				async execute(args, toolCtx) {
-					return executeWorktreeDelete(args.reason, toolCtx?.sessionID)
-				},
-			}),
-		},
-
 		"command.execute.before": async (input, output): Promise<void> => {
 			const parsed = parseWorktreeCommand(input.command, input.arguments)
 			if (!parsed) return
