@@ -10,15 +10,18 @@ const PLUGIN_NAME = "opencode-worktree"
 const COMMAND_FILES = ["btw.md", "worktree-create.md", "worktree-delete.md"]
 
 const cwd = process.cwd()
-const configPaths = [
-  join(cwd, "opencode.json"),
-  join(cwd, "opencode.jsonc"),
-  join(cwd, ".opencode", "opencode.json"),
-  join(cwd, ".opencode", "opencode.jsonc"),
-]
 
-function findConfig() {
-  for (const filePath of configPaths) {
+function configPaths(name) {
+  return [
+    join(cwd, `${name}.json`),
+    join(cwd, `${name}.jsonc`),
+    join(cwd, ".opencode", `${name}.json`),
+    join(cwd, ".opencode", `${name}.jsonc`),
+  ]
+}
+
+function findConfig(name) {
+  for (const filePath of configPaths(name)) {
     if (existsSync(filePath)) return filePath
   }
   return null
@@ -29,19 +32,42 @@ function parseJsonc(content) {
   return JSON.parse(stripped)
 }
 
-function ensurePluginInstalled(configPath, config) {
+function ensurePluginInstalled(configPath, config, label) {
   const nextConfig = config && typeof config === "object" ? config : {}
   const plugins = Array.isArray(nextConfig.plugin) ? nextConfig.plugin : []
 
   if (!plugins.includes(PLUGIN_NAME)) {
     plugins.push(PLUGIN_NAME)
     nextConfig.plugin = plugins
+    mkdirSync(dirname(configPath), { recursive: true })
     writeFileSync(configPath, `${JSON.stringify(nextConfig, null, 2)}\n`)
-    console.log(`  Added ${PLUGIN_NAME} to plugins`)
+    console.log(`  Added ${PLUGIN_NAME} to ${label} plugins`)
     return
   }
 
-  console.log("  Plugin already installed")
+  console.log(`  ${label} plugin already installed`)
+}
+
+function installConfig(name, defaultFile) {
+  let configPath = findConfig(name)
+  let config = { plugin: [] }
+
+  if (configPath) {
+    console.log(`  Found ${name} config: ${configPath}`)
+    try {
+      config = parseJsonc(readFileSync(configPath, "utf-8"))
+    } catch (error) {
+      console.error(`  Error parsing ${name} config. Please add plugin manually:\n`)
+      console.error(`    \"plugin\": [\"${PLUGIN_NAME}\"]`)
+      console.error(`\n  ${error instanceof Error ? error.message : String(error)}`)
+      process.exit(1)
+    }
+  } else {
+    configPath = join(cwd, defaultFile)
+    console.log(`  Creating ${name} config: ${configPath}`)
+  }
+
+  ensurePluginInstalled(configPath, config, name)
 }
 
 function copyCommands() {
@@ -61,25 +87,8 @@ function copyCommands() {
 function main() {
   console.log(`\n  Installing ${PLUGIN_NAME}...\n`)
 
-  let configPath = findConfig()
-  let config = { plugin: [] }
-
-  if (configPath) {
-    console.log(`  Found config: ${configPath}`)
-    try {
-      config = parseJsonc(readFileSync(configPath, "utf-8"))
-    } catch (error) {
-      console.error("  Error parsing config. Please add plugin manually:\n")
-      console.error(`    \"plugin\": [\"${PLUGIN_NAME}\"]`)
-      console.error(`\n  ${error instanceof Error ? error.message : String(error)}`)
-      process.exit(1)
-    }
-  } else {
-    configPath = join(cwd, "opencode.json")
-    console.log(`  Creating config: ${configPath}`)
-  }
-
-  ensurePluginInstalled(configPath, config)
+  installConfig("opencode", "opencode.json")
+  installConfig("tui", "tui.json")
   copyCommands()
 
   console.log("\n  Done! Run 'opencode' to start.\n")
