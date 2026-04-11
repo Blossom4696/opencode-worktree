@@ -1,94 +1,14 @@
-import { openSessionTerminal } from "./plugin/worktree/terminal"
+import type {
+	TuiCommand,
+	TuiDialogSelectOption,
+	TuiPlugin,
+	TuiPluginApi,
+	TuiPluginModule,
+} from "@opencode-ai/plugin/tui"
+import type { TextPart } from "@opencode-ai/sdk/v2"
+import { forkSessionIntoNewWindow } from "./plugin/worktree/fork-session.ts"
+import { openTerminal } from "./plugin/worktree/terminal"
 
-type TuiSize = "small" | "medium" | "large"
-type ToastVariant = "info" | "success" | "warning" | "error"
-
-type SessionMessage = {
-	id: string
-	role: string
-}
-
-type TextPart = {
-	type: "text"
-	text: string
-	synthetic?: boolean
-	ignored?: boolean
-}
-
-type Part = TextPart | { type: string; [key: string]: unknown }
-
-type SelectOption<Value> = {
-	title: string
-	value: Value
-	description?: string
-	footer?: string
-	category?: string
-	disabled?: boolean
-	onSelect?: () => void | Promise<void>
-}
-
-type CommandOption = SelectOption<string> & {
-	keybind?: string
-	suggested?: boolean
-	slash?: {
-		name: string
-		aliases?: string[]
-	}
-	enabled?: boolean
-	hidden?: boolean
-}
-
-type SessionResponse = {
-	data?: {
-		id: string
-	}
-	error?: unknown
-}
-
-type TuiPluginApi = {
-	command: {
-		register: (cb: () => CommandOption[]) => (() => void) | void
-	}
-	route: {
-		current: {
-			name: string
-			params?: Record<string, unknown>
-		}
-	}
-	ui: {
-		DialogSelect: <Value>(props: {
-			title: string
-			options: SelectOption<Value>[]
-			onMove?: (item: SelectOption<Value>) => void
-		}) => unknown
-		dialog: {
-			replace: (render: () => unknown, onClose?: () => void) => void
-			clear: () => void
-			setSize: (size: TuiSize) => void
-		}
-		toast: (input: { message: string; variant?: ToastVariant }) => void
-	}
-	state: {
-		path: {
-			directory?: string
-		}
-		session: {
-			messages: (sessionID: string) => SessionMessage[]
-		}
-		part: (messageID: string) => Part[]
-	}
-	client: {
-		session: {
-			create: (input?: Record<string, unknown>) => Promise<SessionResponse>
-			fork: (input: { sessionID: string; messageID?: string }) => Promise<SessionResponse>
-		}
-	}
-}
-
-type TuiPluginModule = {
-	id: string
-	tui: (api: TuiPluginApi) => Promise<void>
-}
 
 const id = "opencode-worktree"
 const SESSION_COMMAND_CATEGORY = "Session"
@@ -101,8 +21,8 @@ function currentSessionID(api: TuiPluginApi): string | undefined {
 	return typeof sessionID === "string" ? sessionID : undefined
 }
 
-function getForkableMessageOptions(api: TuiPluginApi, sessionID: string): SelectOption<string>[] {
-	const options: SelectOption<string>[] = []
+function getForkableMessageOptions(api: TuiPluginApi, sessionID: string): TuiDialogSelectOption<string>[] {
+	const options: TuiDialogSelectOption<string>[] = []
 	const messages = api.state.session.messages(sessionID)
 
 	for (const message of messages) {
@@ -132,34 +52,6 @@ function getLaunchDirectory(api: TuiPluginApi): string | undefined {
 	return undefined
 }
 
-async function openSpawnedSession(
-	api: TuiPluginApi,
-	cwd: string,
-	result: SessionResponse,
-	windowName: string,
-	successMessage: string,
-): Promise<void> {
-	if (result.error || !result.data?.id) {
-		const message = result.error instanceof Error ? result.error.message : "创建 session 失败"
-		api.ui.toast({ message, variant: "error" })
-		return
-	}
-
-	const openResult = await openSessionTerminal(cwd, result.data.id, windowName, {
-		detachedInTmux: true,
-	})
-	if (!openResult.success) {
-		api.ui.toast({
-			message: `已创建 session ${result.data.id}，但打开终端失败：${openResult.error ?? "未知错误"}`,
-			variant: "warning",
-		})
-		return
-	}
-
-	api.ui.toast({ message: successMessage, variant: "success" })
-	api.ui.dialog.clear()
-}
-
 function showForkDialog(api: TuiPluginApi, sessionID: string) {
 	const options = getForkableMessageOptions(api, sessionID)
 	if (options.length === 0) {
@@ -173,31 +65,41 @@ function showForkDialog(api: TuiPluginApi, sessionID: string) {
 			title: FORK_COMMAND_TITLE,
 			options: options.map((option) => ({
 				...option,
-				onSelect: async () => {
-					const cwd = getLaunchDirectory(api)
-					if (!cwd) return
-					const result = await api.client.session.fork({
-						sessionID,
-						messageID: option.value,
-					})
-					await openSpawnedSession(
-						api,
-						cwd,
-						result,
-						result.data?.id ?? "fork",
-						"已在新 tmux 窗口打开 fork session",
-					)
+				onSelect: () => {
+					void (async () => {
+						const cwd = getLaunchDirectory(api)
+						if (!cwd) return
+						const result = await forkSessionIntoNewWindow({
+							client: api.client,
+							directory: cwd,
+							sessionId: sessionID,
+							messageId: option.value,
+							log: {
+								debug: () => {},
+								warn: () => {},
+							},
+							openInDetachedTmux: true,
+						})
+						if (!result.ok) {
+							api.ui.toast({ message: result.error, variant: "error" })
+							return
+						}
+
+						api.ui.toast({ message: "已在新 tmux 窗口打开 fork session", variant: "success" })
+						api.ui.dialog.clear()
+					})()
 				},
 			})),
 		})
 	})
 }
 
-const tui = async (api: TuiPluginApi) => {
+
+const tui: TuiPlugin = async (api) => {
 	api.command.register(() => {
 		const sessionID = currentSessionID(api)
 
-		return [
+		const commands: TuiCommand[] = [
 			{
 				title: FORK_COMMAND_TITLE,
 				value: "worktree.session.fork_from_message",
@@ -215,20 +117,28 @@ const tui = async (api: TuiPluginApi) => {
 				title: NEW_COMMAND_TITLE,
 				value: "worktree.session.new_window",
 				category: SESSION_COMMAND_CATEGORY,
-				onSelect: async () => {
-					const cwd = getLaunchDirectory(api)
-					if (!cwd) return
-					const result = await api.client.session.create({})
-					await openSpawnedSession(
-						api,
-						cwd,
-						result,
-						result.data?.id ?? "new-session",
-						"已在新 tmux 窗口打开新 session",
-					)
+				onSelect: () => {
+					void (async () => {
+						const cwd = getLaunchDirectory(api)
+						if (!cwd) return
+						const openResult = await openTerminal(cwd, "opencode", "new-session", {
+							detachedInTmux: true,
+						})
+						if (!openResult.success) {
+							api.ui.toast({
+								message: `打开新 session 失败：${openResult.error ?? "未知错误"}`,
+								variant: "error",
+							})
+							return
+						}
+
+						api.ui.toast({ message: "已在新 tmux 窗口打开新 session", variant: "success" })
+					})()
 				},
 			},
 		]
+
+		return commands
 	})
 }
 

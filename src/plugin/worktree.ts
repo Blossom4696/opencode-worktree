@@ -77,6 +77,13 @@ const Result = {
 }
 
 /**
+ * Session path params that is compatible with both `{ id }` and `{ sessionID }` SDK shapes.
+ */
+function buildSessionPath(sessionID: string): { id: string; sessionID: string } {
+	return { id: sessionID, sessionID }
+}
+
+/**
  * Git branch name validation - blocks invalid refs and shell metacharacters
  * Characters blocked: control chars (0x00-0x1f, 0x7f), ~^:?*[]\\, and shell metacharacters
  */
@@ -233,7 +240,7 @@ async function forkWithContext(
 
 	// Fork session
 	const forkedSessionResponse = await client.session.fork({
-		path: { id: sessionId },
+		path: buildSessionPath(sessionId),
 		body: {},
 	})
 	const forkedSession = forkedSessionResponse.data
@@ -300,7 +307,7 @@ async function forkWithContext(
 				})
 				.catch(() => {})
 		})
-		await client.session.delete({ path: { id: forkedSession.id } }).catch((e) => {
+		await client.session.delete({ path: buildSessionPath(forkedSession.id) }).catch((e) => {
 			client.app
 				.log({
 					body: {
@@ -687,7 +694,7 @@ async function loadWorktreeConfig(directory: string, log: Logger): Promise<Workt
 async function getRootSessionId(client: OpencodeClient, sessionId: string): Promise<string> {
 	let currentId = sessionId
 	for (let depth = 0; depth < MAX_SESSION_CHAIN_DEPTH; depth++) {
-		const session = await client.session.get({ path: { id: currentId } })
+		const session = await client.session.get({ path: buildSessionPath(currentId) })
 		if (!session.data?.parentID) return currentId
 		currentId = session.data.parentID
 	}
@@ -747,7 +754,7 @@ export const WorktreePlugin: Plugin = async (ctx) => {
 		if (trimmedPrompt) {
 			try {
 				await client.session.prompt({
-					path: { id: forkedSession.id },
+					path: buildSessionPath(forkedSession.id),
 					body: {
 						parts: [{ type: "text", text: trimmedPrompt }],
 					},
@@ -759,7 +766,9 @@ export const WorktreePlugin: Plugin = async (ctx) => {
 			}
 		}
 
-		const terminalResult = await openSessionTerminal(directory, forkedSession.id)
+		const terminalResult = await openSessionTerminal(directory, forkedSession.id, undefined, {
+			detachedInTmux: true,
+		})
 
 		if (!terminalResult.success) {
 			log.warn(`[worktree] Failed to open terminal: ${terminalResult.error}`)
@@ -822,7 +831,9 @@ export const WorktreePlugin: Plugin = async (ctx) => {
 			`Forked session ${forkedSession.id}, plan: ${planCopied}, delegations: ${delegationsCopied}`,
 		)
 
-		const terminalResult = await openSessionTerminal(worktreePath, forkedSession.id, args.branch)
+		const terminalResult = await openSessionTerminal(worktreePath, forkedSession.id, args.branch, {
+			detachedInTmux: true,
+		})
 
 		if (!terminalResult.success) {
 			log.warn(`[worktree] Failed to open terminal: ${terminalResult.error}`)

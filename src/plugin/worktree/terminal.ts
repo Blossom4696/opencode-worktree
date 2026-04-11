@@ -239,8 +239,9 @@ export async function openTmuxWindow(options: {
 	cwd: string
 	command?: string
 	detached?: boolean
+	route?: Record<string, unknown>
 }): Promise<TerminalResult> {
-	const { sessionName, windowName, cwd, command, detached = false } = options
+	const { sessionName, windowName, cwd, command, detached = false, route } = options
 
 	return tmuxMutex.runExclusive(async () => {
 		try {
@@ -260,9 +261,13 @@ export async function openTmuxWindow(options: {
 				const scriptPath = path.join(getTempDir(), `worktree-${Bun.randomUUIDv7()}.sh`)
 				const escapedCwd = escapeBash(cwd)
 				const escapedCommand = escapeBash(command)
+				const routeExport = route
+					? `export OPENCODE_ROUTE="${escapeBash(JSON.stringify(route))}"
+`
+					: ""
 				const scriptContent = wrapWithSelfCleanup(
 					`cd "${escapedCwd}" || exit 1
-${escapedCommand}
+${routeExport}${escapedCommand}
 exec $SHELL`,
 				)
 				await Bun.write(scriptPath, scriptContent)
@@ -281,8 +286,11 @@ exec $SHELL`,
 				}
 			}
 
-			// Stabilization delay to let tmux server process the window
-			await Bun.sleep(STABILIZATION_DELAY_MS)
+			// Detached windows do not need an extra client-visible settle delay.
+			// Keep the pause only when tmux is about to switch the active window.
+			if (!detached) {
+				await Bun.sleep(STABILIZATION_DELAY_MS)
+			}
 
 			return { success: true }
 		} catch (error) {
@@ -978,6 +986,7 @@ export async function openTerminal(
 	windowName?: string,
 	options?: {
 		detachedInTmux?: boolean
+		route?: Record<string, unknown>
 	},
 ): Promise<TerminalResult> {
 	const terminalType = detectTerminalType()
@@ -989,6 +998,7 @@ export async function openTerminal(
 				cwd,
 				command,
 				detached: options?.detachedInTmux,
+				route: options?.route,
 			})
 
 		case "macos":
@@ -1019,7 +1029,9 @@ export async function openSessionTerminal(
 	windowName: string = sessionID,
 	options?: {
 		detachedInTmux?: boolean
+		route?: Record<string, unknown>
 	},
 ): Promise<TerminalResult> {
-	return openTerminal(cwd, `opencode --session ${sessionID}`, windowName, options)
+	const command = options?.route ? "opencode" : `opencode --session ${sessionID}`
+	return openTerminal(cwd, command, windowName, options)
 }
