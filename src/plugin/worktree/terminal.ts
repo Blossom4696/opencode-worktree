@@ -238,13 +238,17 @@ export async function openTmuxWindow(options: {
 	windowName: string
 	cwd: string
 	command?: string
+	detached?: boolean
 }): Promise<TerminalResult> {
-	const { sessionName, windowName, cwd, command } = options
+	const { sessionName, windowName, cwd, command, detached = false } = options
 
 	return tmuxMutex.runExclusive(async () => {
 		try {
 			// Build tmux new-window command
 			const tmuxArgs = ["new-window", "-n", windowName, "-c", cwd, "-P", "-F", "#{pane_id}"]
+			if (detached) {
+				tmuxArgs.splice(1, 0, "-d")
+			}
 
 			// Add session target if specified
 			if (sessionName) {
@@ -972,6 +976,9 @@ export async function openTerminal(
 	cwd: string,
 	command?: string,
 	windowName?: string,
+	options?: {
+		detachedInTmux?: boolean
+	},
 ): Promise<TerminalResult> {
 	const terminalType = detectTerminalType()
 
@@ -981,6 +988,7 @@ export async function openTerminal(
 				windowName: windowName || "worktree",
 				cwd,
 				command,
+				detached: options?.detachedInTmux,
 			})
 
 		case "macos":
@@ -1009,6 +1017,9 @@ export async function openSessionTerminal(
 	cwd: string,
 	sessionID: string,
 	windowName: string = sessionID,
+	options?: {
+		detachedInTmux?: boolean
+	},
 ): Promise<TerminalResult> {
-	return openTerminal(cwd, `opencode --session ${sessionID}`, windowName)
+	return openTerminal(cwd, `opencode --session ${sessionID}`, windowName, options)
 }

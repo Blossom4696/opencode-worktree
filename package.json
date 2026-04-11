@@ -5,7 +5,8 @@
   "main": "./src/server.ts",
   "exports": {
     ".": "./src/server.ts",
-    "./server": "./src/server.ts"
+    "./server": "./src/server.ts",
+    "./tui": "./src/tui.tsx"
   },
   "bin": {
     "opencode-worktree": "./bin/install.js"
