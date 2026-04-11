@@ -1000,3 +1000,15 @@ export async function openTerminal(
 			return { success: false, error: `Unsupported terminal type: ${terminalType}` }
 	}
 }
+
+/**
+ * Open OpenCode in a new terminal context for a session.
+ * Reuses platform-specific spawning behavior while standardizing the resume command.
+ */
+export async function openSessionTerminal(
+	cwd: string,
+	sessionID: string,
+	windowName: string = sessionID,
+): Promise<TerminalResult> {
+	return openTerminal(cwd, `opencode --session ${sessionID}`, windowName)
+}

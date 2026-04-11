@@ -45,7 +45,7 @@ import {
 	removeSession,
 	setPendingDelete,
 } from "./worktree/state"
-import { openTerminal } from "./worktree/terminal"
+import { openSessionTerminal } from "./worktree/terminal"
 
 /** Maximum retries for database initialization */
 const DB_MAX_RETRIES = 3
@@ -759,7 +759,7 @@ export const WorktreePlugin: Plugin = async (ctx) => {
 			}
 		}
 
-		const terminalResult = await openTerminal(directory, resumeCommand, forkedSession.id)
+		const terminalResult = await openSessionTerminal(directory, forkedSession.id)
 
 		if (!terminalResult.success) {
 			log.warn(`[worktree] Failed to open terminal: ${terminalResult.error}`)
@@ -822,11 +822,7 @@ export const WorktreePlugin: Plugin = async (ctx) => {
 			`Forked session ${forkedSession.id}, plan: ${planCopied}, delegations: ${delegationsCopied}`,
 		)
 
-		const terminalResult = await openTerminal(
-			worktreePath,
-			`opencode --session ${forkedSession.id}`,
-			args.branch,
-		)
+		const terminalResult = await openSessionTerminal(worktreePath, forkedSession.id, args.branch)
 
 		if (!terminalResult.success) {
 			log.warn(`[worktree] Failed to open terminal: ${terminalResult.error}`)
