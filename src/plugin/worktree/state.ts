@@ -15,6 +15,7 @@ import * as path from "node:path"
 import { z } from "zod"
 import type { OpencodeClient } from "../kdco-primitives"
 import { getProjectId, logWarn } from "../kdco-primitives"
+import { buildDefaultDirectoryName } from "./path-utils"
 
 // =============================================================================
 // TYPES
@@ -78,8 +79,9 @@ export async function getWorktreePath(projectRoot: string, branch: string): Prom
 	if (!branch || typeof branch !== "string") {
 		throw new Error("branch is required")
 	}
-	const projectId = await getProjectId(projectRoot)
-	return path.join(os.homedir(), ".local", "share", "opencode", "worktree", projectId, branch)
+	const parentDir = path.dirname(projectRoot)
+	const directoryName = buildDefaultDirectoryName(projectRoot, branch)
+	return path.join(parentDir, directoryName)
 }
 
 /**

@@ -36,13 +36,13 @@ flowchart LR
     F --> G[Session Ends]
 ```
 
-1. **Create** - AI calls `worktree_create("feature/dark-mode")`
-2. **Terminal spawns** - New window opens with OpenCode at `~/.local/share/opencode/worktree/<project-id>/feature/dark-mode`
+1. **Create** - AI calls `worktree_create("feature/dark-mode")` or uses `ctrl+p` → `Worktree session (ctrl+p)`
+2. **Terminal spawns** - New window opens with OpenCode at `<repo-parent>/<repo-name>-<worktree-name>`
 3. **Work** - AI experiments in complete isolation
 4. **Delete** - AI calls `worktree_delete("reason")`
 5. **Cleanup** - Changes commit automatically, git worktree removed
 
-Worktrees are stored in `~/.local/share/opencode/worktree/<project-id>/<branch>/` outside your repository.
+Worktrees are stored at the repository sibling level: `<repo-parent>/<repo-name>-<worktree-name>`.
 
 ## Installation
 
@@ -60,12 +60,18 @@ ocx add kdco/workspace --from https://registry.kdco.dev
 
 ## Usage
 
-The plugin adds two tools:
+The plugin adds two tools and one `ctrl+p` command entry:
 
 | Tool | Purpose |
 |------|---------|
 | `worktree_create(branch, baseBranch?)` | Create a new git worktree for isolated development. A new terminal spawns with OpenCode ready. |
 | `worktree_delete(reason)` | Delete the current worktree. Changes commit automatically before removal. |
+
+`ctrl+p` → `Worktree session (ctrl+p)` supports:
+- `new-session`: worktreeName
+- `fork-from-message`: source message + worktreeName + optional customDirectoryName
+- Default directory name: `<repo-name>-<worktreeName>`
+- `customDirectoryName` overrides only directory name; branch still derives from `worktreeName`
 
 ### Creating a Worktree
 
@@ -76,7 +82,7 @@ worktree_create:
 ```
 
 When called, this:
-1. Creates git worktree at `~/.local/share/opencode/worktree/<project-id>/feature/dark-mode`
+1. Creates git worktree at `<repo-parent>/<repo-name>-feature-dark-mode` (default naming)
 2. Syncs files based on `.opencode/worktree.jsonc`, or falls back to `~/.config/opencode/worktree.jsonc` when the repo-local config is missing
 3. Runs post-create hooks (e.g., `pnpm install`)
 4. Opens a new terminal with OpenCode running
@@ -190,7 +196,7 @@ Worktrees created with this plugin work fine in OpenCode Desktop, but you lose t
 
 ### What happens if I forget to delete the worktree?
 
-Changes remain in `~/.local/share/opencode/worktree/<project-id>/<branch>`. The branch exists in git. You can manually check out or delete it later. The plugin doesn't force cleanup—it's just the convenient default path.
+Changes remain in the sibling worktree directory `<repo-parent>/<repo-name>-<worktree-name>`. The branch exists in git. You can manually check out or delete it later. The plugin doesn't force cleanup—it's just the convenient default path.
 
 ### Can I have multiple worktrees simultaneously?
 

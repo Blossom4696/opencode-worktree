@@ -83,6 +83,16 @@ async function forkWithContext(
 	return { id: forkedSession.id }
 }
 
+export async function forkSessionWithContext(input: {
+	client: OpencodeClient
+	directory: string
+	sessionId: string
+	messageId?: string
+}): Promise<{ sessionId: string }> {
+	const forked = await forkWithContext(input.client, input.sessionId, input.directory, input.messageId)
+	return { sessionId: forked.id }
+}
+
 export async function forkSessionIntoNewWindow(input: {
 	client: OpencodeClient
 	directory: string
@@ -95,20 +105,25 @@ export async function forkSessionIntoNewWindow(input: {
 	const { client, directory, sessionId, messageId, windowName, log, openInDetachedTmux = true } = input
 
 	try {
-		const forkedSession = await forkWithContext(client, sessionId, directory, messageId)
-		log.debug(`Forked session ${forkedSession.id}, launched via shared helper`)
+		const forkedSession = await forkSessionWithContext({
+			client,
+			directory,
+			sessionId,
+			messageId,
+		})
+		log.debug(`Forked session ${forkedSession.sessionId}, launched via shared helper`)
 
-		const terminalResult = await openSessionTerminal(directory, forkedSession.id, windowName, {
+		const terminalResult = await openSessionTerminal(directory, forkedSession.sessionId, windowName, {
 			detachedInTmux: openInDetachedTmux,
 		})
 		if (!terminalResult.success) {
 			return {
 				ok: false,
-				error: `已创建 session ${forkedSession.id}，但打开终端失败：${terminalResult.error ?? "未知错误"}`,
+				error: `已创建 session ${forkedSession.sessionId}，但打开终端失败：${terminalResult.error ?? "未知错误"}`,
 			}
 		}
 
-		return { ok: true, sessionId: forkedSession.id }
+		return { ok: true, sessionId: forkedSession.sessionId }
 	} catch (error) {
 		return { ok: false, error: error instanceof Error ? error.message : String(error) }
 	}

@@ -453,6 +453,9 @@ async function createWorktree(
 	baseBranch?: string,
 ): Promise<Result<string, string>> {
 	const worktreePath = await getWorktreePath(repoRoot, branch)
+	if (await pathExists(worktreePath)) {
+		return Result.err(`Worktree directory already exists: ${worktreePath}`)
+	}
 
 	// Ensure parent directory exists
 	await mkdir(path.dirname(worktreePath), { recursive: true })
