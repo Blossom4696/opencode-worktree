@@ -262,13 +262,12 @@ export async function openTmuxWindow(options: {
 				const escapedCwd = escapeBash(cwd)
 				const escapedCommand = escapeBash(command)
 				const routeExport = route
-					? `export OPENCODE_ROUTE="${escapeBash(JSON.stringify(route))}"
-`
+					? `export OPENCODE_ROUTE="${escapeBash(JSON.stringify(route))}"; `
 					: ""
+				const shellCommand = `${routeExport}${escapedCommand}`
 				const scriptContent = wrapWithSelfCleanup(
 					`cd "${escapedCwd}" || exit 1
-${routeExport}${escapedCommand}
-exec $SHELL`,
+exec "$SHELL" -i -c "${escapeBash(shellCommand)}"`,
 				)
 				await Bun.write(scriptPath, scriptContent)
 				Bun.spawnSync(["chmod", "+x", scriptPath])
